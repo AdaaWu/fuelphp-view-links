@@ -1,0 +1,27 @@
+{
+  "name": "fuelphp-view-links",
+  "displayName": "FuelPHP View Links",
+  "description": "Clickable links for View::forge() paths in FuelPHP projects",
+  "version": "0.0.1",
+  "publisher": "sunny-fuel",
+  "engines": { "vscode": "^1.60.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onLanguage:php"],
+  "main": "./extension.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AdaaWu/fuelphp-view-links"
+  },
+  "contributes": {
+    "configuration": {
+      "title": "FuelPHP View Links",
+      "properties": {
+        "fuelpHPViewLinks.viewsPath": {
+          "type": "string",
+          "default": "fuel/app/views",
+          "description": "Path to the FuelPHP views directory, relative to workspace root"
+        }
+      }
+    }
+  }
+}
