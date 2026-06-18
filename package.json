@@ -1,27 +1,54 @@
 {
-  "name": "fuelphp-view-links",
-  "displayName": "FuelPHP View Links",
-  "description": "Clickable links for View::forge() paths in FuelPHP projects",
-  "version": "0.0.1",
+  "name": "fuelphp-tools",
+  "displayName": "FuelPHP Tools",
+  "description": "FuelPHP developer tools: clickable path links (View::forge, Asset::css/js/img, Config::load, Lang::load) and Route Runner",
+  "version": "0.2.0",
   "publisher": "sunny-fuel",
-  "engines": { "vscode": "^1.60.0" },
-  "categories": ["Other"],
-  "activationEvents": ["onLanguage:php"],
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:php",
+    "workspaceContains:**/routes.php"
+  ],
   "main": "./extension.js",
   "repository": {
     "type": "git",
     "url": "https://github.com/AdaaWu/fuelphp-view-links"
   },
   "contributes": {
+    "commands": [
+      {
+        "command": "fuelpHPTools.runRoute",
+        "title": "FuelPHP: Run Route in Browser"
+      }
+    ],
     "configuration": {
-      "title": "FuelPHP View Links",
+      "title": "FuelPHP Tools",
       "properties": {
-        "fuelpHPViewLinks.viewsPath": {
+        "fuelpHPTools.domain": {
+          "type": "string",
+          "default": "http://localhost",
+          "description": "Base domain for Route Runner (e.g. http://localhost or https://dev.example.com)"
+        },
+        "fuelpHPTools.viewsPath": {
           "type": "string",
           "default": "fuel/app/views",
           "description": "Path to the FuelPHP views directory, relative to workspace root"
+        },
+        "fuelpHPTools.assetsPath": {
+          "type": "string",
+          "default": "public/assets",
+          "description": "Path to the assets directory, relative to workspace root"
         }
       }
     }
+  },
+  "devDependencies": {
+    "ovsx": "^0.9.4"
   }
 }
