@@ -135,6 +135,91 @@ class RouteControllerLinkProvider {
   }
 }
 
+// ─── Controller → routes.php Link ────────────────────────────────────────────
+
+function findRoutesPhpPath(root) {
+  const p = path.join(root, 'fuel', 'app', 'config', 'routes.php');
+  return fs.existsSync(p) ? p : null;
+}
+
+// Controller_User_Shop_Ajax → 'user/shop/ajax'
+function controllerClassToPath(className) {
+  return className.replace(/^Controller_/i, '').toLowerCase().replace(/_/g, '/');
+}
+
+// Find the line number in routes.php that has => 'controllerPath' or => 'controllerPath/actionName'
+// Returns 1-based line number, or null if not found
+function findRouteLineForAction(routesPath, controllerPath, actionName) {
+  const content = fs.readFileSync(routesPath, 'utf8');
+  const lines = content.split('\n');
+  // Candidates: 'controllerPath/actionName' or (when actionName=index) 'controllerPath'
+  const candidates = [`${controllerPath}/${actionName}`];
+  if (actionName === 'index') candidates.push(controllerPath);
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim().startsWith('//')) continue;
+    for (const candidate of candidates) {
+      // Match => 'candidate' (with optional trailing comma/whitespace)
+      if (new RegExp(`=>\\s*'${candidate.replace(/\//g, '\\/')}\\s*'`).test(line)) {
+        return i + 1;
+      }
+    }
+  }
+  return null;
+}
+
+class ControllerToRouteLinkProvider {
+  provideDocumentLinks(document) {
+    const links = [];
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+    if (!workspaceFolder) return links;
+    const root = workspaceFolder.uri.fsPath;
+
+    // Only apply to controller files
+    if (!document.uri.fsPath.includes('/controller/')) return links;
+
+    const routesPath = findRoutesPhpPath(root);
+    if (!routesPath) return links;
+
+    const text = document.getText();
+    const lines = text.split('\n');
+
+    // Find class name
+    let controllerPath = null;
+    for (const line of lines) {
+      const m = line.match(/class\s+(Controller_[A-Za-z_]+)/);
+      if (m) { controllerPath = controllerClassToPath(m[1]); break; }
+    }
+    if (!controllerPath) return links;
+
+    // Match action methods: action_foo, get_foo, post_foo, delete_foo
+    const ACTION_RE = /function\s+(action_|get_|post_|delete_|put_)([a-zA-Z0-9_]+)\s*\(/;
+
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(ACTION_RE);
+      if (!m) continue;
+      const actionName = m[2];
+
+      const routeLine = findRouteLineForAction(routesPath, controllerPath, actionName);
+      if (!routeLine) continue;
+
+      // Underline the function name in the method declaration
+      const nameStart = lines[i].indexOf(m[1] + m[2]);
+      if (nameStart === -1) continue;
+      const lineOffset = lines.slice(0, i).reduce((acc, l) => acc + l.length + 1, 0);
+      const start = document.positionAt(lineOffset + nameStart);
+      const end = document.positionAt(lineOffset + nameStart + m[1].length + m[2].length);
+      const range = new vscode.Range(start, end);
+
+      const targetUri = vscode.Uri.file(routesPath).with({ fragment: `L${routeLine}` });
+      links.push(new vscode.DocumentLink(range, targetUri));
+    }
+
+    return links;
+  }
+}
+
 // ─── Route Runner ─────────────────────────────────────────────────────────────
 
 // Matches:  'some/route'  =>  'controller/action',
@@ -607,6 +692,13 @@ function activate(context) {
     vscode.languages.registerDocumentLinkProvider(
       { pattern: '**/routes.php' },
       new RouteControllerLinkProvider()
+    )
+  );
+
+  context.subscriptions.push(
+    vscode.languages.registerDocumentLinkProvider(
+      { language: 'php', pattern: '**/controller/**/*.php' },
+      new ControllerToRouteLinkProvider()
     )
   );
 
