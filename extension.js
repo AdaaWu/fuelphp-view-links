@@ -303,6 +303,296 @@ async function runRoute(routePatternOrObj, fileUri) {
   vscode.env.openExternal(vscode.Uri.parse(url));
 }
 
+// ─── PHP Const Reader ─────────────────────────────────────────────────────────
+
+const _constCache = new Map(); // root → { NAME: value }
+
+function loadPhpConsts(root) {
+  if (_constCache.has(root)) return _constCache.get(root);
+  const constFile = path.join(root, 'fuel', 'app', 'config', 'const.php');
+  const map = {};
+  if (fs.existsSync(constFile)) {
+    const lines = fs.readFileSync(constFile, 'utf8').split('\n');
+    for (const line of lines) {
+      // define('NAME', value) or define("NAME", value)
+      const m = line.match(/define\s*\(\s*['"]([^'"]+)['"]\s*,\s*([^)]+)\)/);
+      if (!m) continue;
+      const name = m[1].trim();
+      let val = m[2].trim();
+      // strip surrounding quotes for string values
+      const strM = val.match(/^['"](.*)['"]$/);
+      if (strM) val = strM[1];
+      map[name] = val;
+    }
+  }
+  _constCache.set(root, map);
+  return map;
+}
+
+// ─── Model Table Hover ────────────────────────────────────────────────────────
+
+function fuelPhpTableize(modelClass) {
+  // Mirrors FuelPHP Inflector::tableize():
+  // Model_Businesstype → businesstypes
+  // Model_Recruit_Shop → recruit_shops
+  // Model_Menesth_Shop_Common_Detail → menesth_shop_common_details
+  let name = modelClass.replace(/^Model_/i, '');
+  // underscore: insert _ before uppercase letters following lowercase (CamelCase → snake_case)
+  name = name.replace(/([a-z\d])([A-Z])/g, '$1_$2')
+             .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
+             .toLowerCase();
+  // pluralize: simple English rules sufficient for this codebase
+  if (name.endsWith('s') || name.endsWith('x') || name.endsWith('z') ||
+      name.endsWith('ch') || name.endsWith('sh')) {
+    name = name + 'es';
+  } else if (name.endsWith('y') && !/[aeiou]y$/.test(name)) {
+    name = name.slice(0, -1) + 'ies';
+  } else {
+    name = name + 's';
+  }
+  return name;
+}
+
+function resolveTableName(root, modelClass) {
+  // Model_Recruit_Shop → fuel/app/classes/model/recruit/shop.php
+  const suffix = modelClass.replace(/^Model_/, '');
+  const parts = suffix.toLowerCase().split('_');
+  const filePath = path.join(root, 'fuel', 'app', 'classes', 'model', ...parts) + '.php';
+  if (!fs.existsSync(filePath)) return null;
+  const content = fs.readFileSync(filePath, 'utf8');
+  // Method A: CONST TABLE_NAME = 'xxx'
+  let m = content.match(/CONST\s+TABLE_NAME\s*=\s*['"]([^'"]+)['"]/i);
+  if (m) return m[1];
+  // Method B: protected static $_table_name = 'xxx'
+  m = content.match(/\$_table_name\s*=\s*['"]([^'"]+)['"]/);
+  if (m) return m[1];
+  // Fallback: FuelPHP Inflector::tableize() behaviour
+  return fuelPhpTableize(modelClass);
+}
+
+class ModelTableHoverProvider {
+  provideHover(document, position) {
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+    if (!workspaceFolder) return null;
+    const root = workspaceFolder.uri.fsPath;
+
+    const wordRange = document.getWordRangeAtPosition(position, /Model_[A-Za-z_]+/);
+    if (!wordRange) return null;
+    const modelClass = document.getText(wordRange);
+
+    const tableName = resolveTableName(root, modelClass);
+    if (!tableName) return null;
+
+    return new vscode.Hover(
+      new vscode.MarkdownString(`**表名：** \`${tableName}\``)
+    );
+  }
+}
+
+// ─── Model SQL Copy ───────────────────────────────────────────────────────────
+
+function resolveCurrentModelClass(lines) {
+  for (const line of lines) {
+    const m = line.match(/class\s+(Model_[A-Za-z_]+)/);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+function extractFunctionBody(lines, startLine) {
+  let depth = 0;
+  let started = false;
+  const bodyLines = [];
+  for (let i = startLine; i < lines.length; i++) {
+    const line = lines[i];
+    for (const ch of line) {
+      if (ch === '{') { depth++; started = true; }
+      else if (ch === '}') depth--;
+    }
+    bodyLines.push(line);
+    if (started && depth === 0) break;
+  }
+  return bodyLines;
+}
+
+function resolveLineTokens(line, root, currentModelClass) {
+  // Tokenise a PHP string-concatenation line into its final string value.
+  // Handles: 'literal' . self::table() . ' rest' . PHP_EOL . FLG_ON etc.
+  // Returns the joined string, or null if there is no SQL variable assignment.
+  const ASSIGN_RE = /\$(?:sql|query)\s*\.?=\s*(.*)/s;
+  const m = line.match(ASSIGN_RE);
+  if (!m) return null;
+
+  let expr = m[1].replace(/;\s*$/, ''); // strip trailing semicolon
+
+  const selfTable = (root && currentModelClass) ? (resolveTableName(root, currentModelClass) || 'self::table()') : 'self::table()';
+
+  const parts = [];
+  // Scan token by token
+  let i = 0;
+  while (i < expr.length) {
+    // skip whitespace and dot-concatenation operator
+    if (/[\s.]/.test(expr[i])) { i++; continue; }
+
+    // single-quoted string
+    if (expr[i] === "'") {
+      let j = i + 1;
+      let s = '';
+      while (j < expr.length) {
+        if (expr[j] === '\\' && j + 1 < expr.length) { s += expr[j + 1]; j += 2; continue; }
+        if (expr[j] === "'") { j++; break; }
+        s += expr[j++];
+      }
+      parts.push(s);
+      i = j;
+      continue;
+    }
+
+    // double-quoted string
+    if (expr[i] === '"') {
+      let j = i + 1;
+      let s = '';
+      while (j < expr.length) {
+        if (expr[j] === '\\' && j + 1 < expr.length) { s += expr[j + 1]; j += 2; continue; }
+        if (expr[j] === '"') { j++; break; }
+        s += expr[j++];
+      }
+      parts.push(s);
+      i = j;
+      continue;
+    }
+
+    // self::table()
+    if (expr.slice(i).startsWith('self::table()')) {
+      parts.push(selfTable);
+      i += 'self::table()'.length;
+      continue;
+    }
+
+    // Model_X::table()
+    const modelMatch = expr.slice(i).match(/^(Model_[A-Za-z_]+)::table\(\)/);
+    if (modelMatch) {
+      const tbl = root ? resolveTableName(root, modelMatch[1]) : null;
+      parts.push(tbl || modelMatch[1]);
+      i += modelMatch[0].length;
+      continue;
+    }
+
+    // PHP_EOL → newline
+    if (expr.slice(i).startsWith('PHP_EOL')) {
+      parts.push('\n');
+      i += 'PHP_EOL'.length;
+      continue;
+    }
+
+    // PHP constants — resolve from const.php if possible, else keep name
+    const constMatch = expr.slice(i).match(/^([A-Z_][A-Z0-9_]{2,})/);
+    if (constMatch) {
+      const constName = constMatch[1];
+      const consts = root ? loadPhpConsts(root) : {};
+      parts.push(constName in consts ? consts[constName] : constName);
+      i += constName.length;
+      continue;
+    }
+
+    // Anything else (variables, function calls) — skip
+    i++;
+  }
+
+  const result = parts.join('');
+  // If no PHP_EOL was present, add a space so adjacent fragments don't merge
+  return result.endsWith('\n') ? result : result + ' ';
+}
+
+function extractSqlFromBody(bodyLines, root, currentModelClass) {
+  const sqlParts = [];
+  let insideConditional = 0;
+
+  for (const line of bodyLines) {
+    // Track conditional depth (rough brace count inside if/else)
+    if (/\bif\s*\(/.test(line)) insideConditional++;
+    if (/^\s*\}/.test(line) && insideConditional > 0) insideConditional--;
+
+    const fragment = resolveLineTokens(line, root, currentModelClass);
+    if (fragment === null || fragment.trim() === '') continue;
+
+    if (insideConditional > 0) {
+      sqlParts.push(`-- [conditional] ${fragment.trim()}`);
+    } else {
+      sqlParts.push(fragment);
+    }
+  }
+
+  return sqlParts.join('').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+class ModelSqlCopyCodeLensProvider {
+  provideCodeLenses(document) {
+    const lenses = [];
+    if (!document.uri.fsPath.includes('/model/')) return lenses;
+    const text = document.getText();
+    const lines = text.split('\n');
+    const FUNC_RE = /public\s+static\s+function\s+\w+\s*\(/;
+    for (let i = 0; i < lines.length; i++) {
+      if (!FUNC_RE.test(lines[i])) continue;
+      const bodyLines = extractFunctionBody(lines, i);
+      if (!bodyLines.some(l => /DB::query/.test(l))) continue;
+      const range = new vscode.Range(i, 0, i, lines[i].length);
+      lenses.push(new vscode.CodeLens(range, {
+        title: '📋 Copy SQL',
+        command: 'fuelpHPTools.copySQL',
+        arguments: [document.uri, i],
+      }));
+    }
+    return lenses;
+  }
+}
+
+function formatSql(sql) {
+  // Keyword list that should start on a new line (uppercase keywords)
+  const TOP_KEYWORDS = /\b(SELECT|FROM|LEFT\s+JOIN|RIGHT\s+JOIN|INNER\s+JOIN|JOIN|WHERE|AND|OR|GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT|OFFSET|UNION|ON|SET|UPDATE|DELETE|INSERT\s+INTO|VALUES)\b/gi;
+
+  // Collapse all whitespace/newlines to single space first
+  let s = sql.replace(/\s+/g, ' ').trim();
+
+  // Insert newline + tab before each top-level keyword
+  s = s.replace(TOP_KEYWORDS, (match) => `\n${match.toUpperCase()}`);
+
+  // Clean up: remove leading newline, normalise multiple blank lines
+  s = s.replace(/^\n/, '').replace(/\n{3,}/g, '\n\n');
+
+  // Indent continuation lines (AND / OR / JOIN / ON) with a tab
+  s = s.split('\n').map((line, idx) => {
+    const kw = line.match(/^(AND|OR|LEFT JOIN|RIGHT JOIN|INNER JOIN|JOIN|ON)\b/i);
+    return (idx > 0 && kw) ? '\t' + line : line;
+  }).join('\n');
+
+  return s;
+}
+
+async function copySQL(fileUri, funcLineIndex) {
+  const doc = await vscode.workspace.openTextDocument(fileUri);
+  const lines = doc.getText().split('\n');
+  const workspaceFolder = vscode.workspace.getWorkspaceFolder(fileUri);
+  const root = workspaceFolder ? workspaceFolder.uri.fsPath : '';
+  const currentModelClass = resolveCurrentModelClass(lines);
+
+  const bodyLines = extractFunctionBody(lines, funcLineIndex);
+  const rawSql = extractSqlFromBody(bodyLines, root, currentModelClass);
+
+  if (!rawSql.trim()) {
+    vscode.window.showWarningMessage('找不到 SQL 字串（$sql / $query）');
+    return;
+  }
+
+  const funcName = (lines[funcLineIndex].match(/function\s+(\w+)\s*\(/) || [])[1] || '?';
+  const header = `-- ${currentModelClass || 'Model'}\n-- ${funcName}\n\n`;
+  const sql = header + formatSql(rawSql);
+  await vscode.env.clipboard.writeText(sql);
+  const lineCount = sql.split('\n').filter(l => l.trim()).length;
+  vscode.window.showInformationMessage(`已複製 SQL（${lineCount} 行）`);
+}
+
 // ─── Activate ─────────────────────────────────────────────────────────────────
 
 function activate(context) {
@@ -328,7 +618,25 @@ function activate(context) {
   );
 
   context.subscriptions.push(
+    vscode.languages.registerHoverProvider(
+      { language: 'php' },
+      new ModelTableHoverProvider()
+    )
+  );
+
+  context.subscriptions.push(
+    vscode.languages.registerCodeLensProvider(
+      { language: 'php', pattern: '**/model/**/*.php' },
+      new ModelSqlCopyCodeLensProvider()
+    )
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand('fuelpHPTools.runRoute', runRoute)
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('fuelpHPTools.copySQL', copySQL)
   );
 }
 

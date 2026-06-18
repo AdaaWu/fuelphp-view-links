@@ -25,6 +25,10 @@
       {
         "command": "fuelpHPTools.runRoute",
         "title": "FuelPHP: Run Route in Browser"
+      },
+      {
+        "command": "fuelpHPTools.copySQL",
+        "title": "FuelPHP: Copy Function SQL"
       }
     ],
     "configuration": {
