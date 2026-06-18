@@ -32,8 +32,8 @@
       "properties": {
         "fuelpHPTools.domain": {
           "type": "string",
-          "default": "http://localhost",
-          "description": "Base domain for Route Runner (e.g. http://localhost or https://dev.example.com)"
+          "default": "",
+          "description": "Base domain for Route Runner (e.g. http://localhost or https://dev.example.com). Leave empty to use FUELPHP_DOMAIN from .env"
         },
         "fuelpHPTools.viewsPath": {
           "type": "string",
