@@ -7,7 +7,7 @@ FuelPHP 開発者向けツールキット。パスジャンプ、ルート実行
 | # | 機能 | 対象 |
 |---|------|------|
 | 1.  | **パスリンク** — `View::forge` / `Asset::css/js/img` / `Config::load` / `Lang::load` のパス文字列をクリックして対応ファイルへジャンプ | 全 PHP ファイル |
-| 2.  | **Controller ジャンプ** — `routes.php` の `=> 'controller/action'` をクリックして Controller のメソッド行へジャンプ | `routes.php` |
+| 2.  | **Controller ↔ routes.php 双方向ジャンプ** — routes.php から Controller メソッドへ、Controller メソッドから routes.php へ双方向にジャンプ | `routes.php` ↔ Controller |
 | 3.  | **Route Runner** — ルート行の上に ▶ Run ボタンを表示。パラメータを入力してブラウザで開く | `routes.php` |
 | 4.  | **Model テーブル名 Hover** — `Model_X` にホバーして実際のDBテーブル名を表示 | 全 PHP ファイル |
 | 5.  | **Function SQL コピー** — メソッド内の SQL をワンクリックでコピー。テーブル名・定数値を自動展開してフォーマット済みで出力 | `model/` ディレクトリ |
@@ -39,7 +39,9 @@ Asset::css('common/layout.css');
 
 ---
 
-## ⭐機能②：routes.php Controller ジャンプ
+## ⭐機能②：Controller ↔ routes.php 双方向ジャンプ
+
+### routes.php → Controller
 
 `routes.php` で `=> 'controller/action'` の値を `Cmd+Click` すると、対応する Controller ファイルの action メソッド行に直接ジャンプします。
 
@@ -54,6 +56,26 @@ Asset::css('common/layout.css');
 1. まず全セグメントをファイルパスとして試みる（`admin/item/index/index` → `admin/item/index.php` + `action_index()`）
 2. 存在しない場合は最後のセグメントを action 名として扱う（`api/product/ajax/update` → `api/product/ajax.php` + `post_update()`）
 3. 対応するファイルが見つからない場合はリンクを表示しない
+
+### Controller → routes.php（逆方向ジャンプ）
+
+Controller ファイルで `action_xxx`・`post_xxx`・`get_xxx` などのメソッド名に下線リンクが表示されます。`Cmd+Click` すると `routes.php` の該当するルート行に直接ジャンプします。
+
+```php
+// Cmd+Click "action_index" → routes.php の該当ルート行へジャンプ
+public function action_index()
+{
+    // ...
+}
+
+// Cmd+Click "post_update" → routes.php の該当ルート行へジャンプ
+public function post_update()
+{
+    // ...
+}
+```
+
+対応するルートが見つからない場合は下線を表示しません。
 
 ---
 

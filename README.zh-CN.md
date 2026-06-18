@@ -7,7 +7,7 @@ FuelPHP 开发者工具套件，提供路径跳转、路由执行、Model 表名
 | # | 功能 | 适用位置 |
 |---|------|---------|
 | 1.  | **路径跳转链接** — `View::forge` / `Asset::css/js/img` / `Config::load` / `Lang::load` 一键跳转到对应文件 | 所有 PHP 文件 |
-| 2.  | **Controller 跳转** — `routes.php` 里的 `=> 'controller/action'` 直接跳到 Controller 对应方法行 | `routes.php` |
+| 2.  | **Controller ↔ routes.php 双向跳转** — routes.php 跳 Controller 方法行；Controller 方法名反向跳回 routes.php | `routes.php` ↔ Controller |
 | 3.  | **Route Runner** — 路由上方显示 ▶ Run 按钮，填入参数后自动打开浏览器 | `routes.php` |
 | 4.  | **Model 表名 Hover** — hover `Model_X` 显示真实数据库表名 | 所有 PHP 文件 |
 | 5.  | **复制 Function SQL** — 一键复制整个方法的 SQL，自动展开表名、常量值并格式化 | `model/` 目录 |
@@ -39,7 +39,9 @@ Asset::css('common/layout.css');
 
 ---
 
-## ⭐功能②：routes.php Controller 跳转
+## ⭐功能②：Controller ↔ routes.php 双向跳转
+
+### routes.php → Controller
 
 在 `routes.php` 里，对 `=> 'controller/action'` 的值按 `Cmd+Click`，直接跳转到对应的 Controller 文件并定位到 action 方法行。
 
@@ -54,6 +56,26 @@ Asset::css('common/layout.css');
 1. 先尝试整段作为文件路径（`admin/item/index/index` → `admin/item/index.php` + `action_index()`）
 2. 不存在则取最后一段作为 action 名称（`api/product/ajax/update` → `api/product/ajax.php` + `post_update()`）
 3. 找不到对应文件时不显示链接
+
+### Controller → routes.php（反向跳转）
+
+在 Controller 文件里，`action_xxx`、`post_xxx`、`get_xxx` 等方法名称上会显示下划线链接。按 `Cmd+Click` 直接跳回 `routes.php` 对应的路由行。
+
+```php
+// Cmd+Click "action_index" → 跳到 routes.php 里定义此路由的行
+public function action_index()
+{
+    // ...
+}
+
+// Cmd+Click "post_update" → 跳到 routes.php 里对应的行
+public function post_update()
+{
+    // ...
+}
+```
+
+找不到对应路由时不显示下划线，不会误导。
 
 ---
 

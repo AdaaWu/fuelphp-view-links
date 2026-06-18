@@ -7,7 +7,7 @@ A developer toolkit for FuelPHP projects. Provides clickable path links, route e
 | # | Feature | Scope |
 |---|---------|-------|
 | 1.  | **Path Links** — `Cmd/Ctrl+Click` on paths in `View::forge` / `Asset::css/js/img` / `Config::load` / `Lang::load` to jump to the file | All PHP files |
-| 2.  | **Controller Jump** — `Cmd/Ctrl+Click` on `=> 'controller/action'` in `routes.php` to jump to the Controller method | `routes.php` |
+| 2.  | **Controller ↔ routes.php Two-Way Jump** — Jump from routes.php to a Controller method, or from a Controller method back to routes.php | `routes.php` ↔ Controller |
 | 3.  | **Route Runner** — ▶ Run CodeLens above each route; fill in params and open in browser automatically | `routes.php` |
 | 4.  | **Model Table Hover** — Hover over `Model_X` to see the real database table name | All PHP files |
 | 5.  | **Copy Function SQL** — One click to copy a method's full SQL with table names, constants, and formatting resolved | `model/` directory |
@@ -37,7 +37,9 @@ Asset::css('common/layout.css');
 
 ---
 
-## ⭐Feature②: Controller Jump
+## ⭐Feature②: Controller ↔ routes.php Two-Way Jump
+
+### routes.php → Controller
 
 In `routes.php`, `Cmd+Click` on the `=> 'controller/action'` value to jump directly to the Controller file at the action method.
 
@@ -52,6 +54,26 @@ In `routes.php`, `Cmd+Click` on the `=> 'controller/action'` value to jump direc
 1. Try the full path as a file first (`admin/item/index/index` → `admin/item/index.php` + `action_index()`)
 2. If not found, treat the last segment as the action name (`api/product/ajax/update` → `api/product/ajax.php` + `post_update()`)
 3. No link is shown if no matching file is found
+
+### Controller → routes.php (Reverse Jump)
+
+In Controller files, method names like `action_xxx`, `post_xxx`, and `get_xxx` are underlined. `Cmd+Click` jumps back to the corresponding route line in `routes.php`.
+
+```php
+// Cmd+Click "action_index" → jumps to the matching route in routes.php
+public function action_index()
+{
+    // ...
+}
+
+// Cmd+Click "post_update" → jumps to the matching route in routes.php
+public function post_update()
+{
+    // ...
+}
+```
+
+No underline is shown if no matching route is found — no false positives.
 
 ---
 
