@@ -70,7 +70,7 @@ function resolveController(root, controllerStr) {
     return { filePath: fullPath, lineNumber };
   }
 
-  // Rule 2: last segment is action name (e.g. user/shop/ajax/clickcount → user/shop/ajax.php + clickcount)
+  // Rule 2: last segment is action name
   if (segments.length >= 2) {
     const filePath = path.join(controllerBase, ...segments.slice(0, -1)) + '.php';
     if (fs.existsSync(filePath)) {
@@ -104,7 +104,7 @@ class RouteControllerLinkProvider {
     const text = document.getText();
     const lines = text.split('\n');
 
-    // Match the value side:  => 'user/shop/ajax/clickcount'
+    // Match the value side 
     const CONTROLLER_VALUE_RE = /=>\s*'([a-zA-Z0-9_\/]+)'/g;
 
     for (let i = 0; i < lines.length; i++) {
@@ -154,10 +154,46 @@ function readDotEnv(workspaceRoot) {
 
 function extractParams(routePattern) {
   const params = [];
-  const re = /\(:([a-zA-Z_][a-zA-Z0-9_]*)\)/g;
+  const seen = new Set();
+  // (:param_name) style
+  const re1 = /\(:([a-zA-Z_][a-zA-Z0-9_]*)\)/g;
   let m;
-  while ((m = re.exec(routePattern)) !== null) {
-    params.push(m[1]);
+  while ((m = re1.exec(routePattern)) !== null) {
+    if (!seen.has(m[1])) { seen.add(m[1]); params.push(m[1]); }
+  }
+  // (?P<param_name>...) style
+  const re2 = /\(\?P<([a-zA-Z_][a-zA-Z0-9_]*)>/g;
+  while ((m = re2.exec(routePattern)) !== null) {
+    if (!seen.has(m[1])) { seen.add(m[1]); params.push(m[1]); }
+  }
+  return params;
+}
+
+// Parse PHP variable-concat route line 
+// Returns list of param names extracted from the variable definitions above
+function extractVarConcatParams(lines, lineIndex) {
+  // Collect variable definitions before the array (lines before return array)
+  const varDefs = {};
+  for (let i = 0; i < lineIndex; i++) {
+    const m = lines[i].match(/^\$([a-zA-Z_][a-zA-Z0-9_]*)\s*=/);
+    if (m) varDefs[m[1]] = lines[i];
+  }
+  // Extract variable names from the concat expression
+  const line = lines[lineIndex];
+  const varNames = [];
+  const re = /\$([a-zA-Z_][a-zA-Z0-9_]*)/g;
+  let m;
+  while ((m = re.exec(line)) !== null) varNames.push(m[1]);
+
+  // For each variable, extract (?P<name>) from its definition
+  const params = [];
+  const seen = new Set();
+  for (const varName of varNames) {
+    const def = varDefs[varName] || '';
+    const re2 = /\(\?P<([a-zA-Z_][a-zA-Z0-9_]*)>/g;
+    while ((m = re2.exec(def)) !== null) {
+      if (!seen.has(m[1])) { seen.add(m[1]); params.push(m[1]); }
+    }
   }
   return params;
 }
@@ -165,10 +201,17 @@ function extractParams(routePattern) {
 function buildUrl(domain, routePattern, values) {
   let url = routePattern;
   for (const [key, val] of Object.entries(values)) {
+    // Replace (:key) style
     url = url.replace(`(:${key})`, encodeURIComponent(val));
+    // Replace (?P<key>...) style — replace entire named group with value
+    url = url.replace(new RegExp(`\\(\\?P<${key}>[^)]*\\)`, 'g'), encodeURIComponent(val));
   }
-  // Remove any leftover unresolved params
-  url = url.replace(/\(:[^)]+\)/g, '_');
+  // Remove leftover unresolved FuelPHP params
+  url = url.replace(/\(:[^)]+\)/g, '');
+  // Remove leftover regex named groups
+  url = url.replace(/\(\?P<[^>]+>[^)]*\)/g, '');
+  // Clean up double slashes and trailing slashes
+  url = url.replace(/\/+/g, '/').replace(/\/$/, '');
   const base = domain.replace(/\/$/, '');
   return `${base}/${url}`;
 }
@@ -179,13 +222,32 @@ class RouteRunnerCodeLensProvider {
     const text = document.getText();
     const lines = text.split('\n');
 
+    // Variable names used in PHP var-concat route lines
+    const PHP_VAR_CONCAT_RE = /^\s*\$[a-zA-Z_][a-zA-Z0-9_]*(\.\$[a-zA-Z_][a-zA-Z0-9_]*)+\s*=>/;
+
     for (let i = 0; i < lines.length; i++) {
-      const m = lines[i].match(ROUTE_LINE_RE);
+      const line = lines[i];
+
+      // Handle variable-concat routes
+      if (PHP_VAR_CONCAT_RE.test(line)) {
+        const controllerMatch = line.match(/=>\s*'([^']+)'/);
+        if (!controllerMatch) continue;
+        const params = extractVarConcatParams(lines, i);
+        const range = new vscode.Range(i, 0, i, line.length);
+        lenses.push(new vscode.CodeLens(range, {
+          title: '▶ Run',
+          command: 'fuelpHPTools.runRoute',
+          arguments: [{ varConcat: true, params }, document.uri],
+        }));
+        continue;
+      }
+
+      const m = line.match(ROUTE_LINE_RE);
       if (!m) continue;
       const routePattern = m[1];
       // Skip special keys and closure routes
-      if (routePattern.startsWith('_') || lines[i].includes('function')) continue;
-      const range = new vscode.Range(i, 0, i, lines[i].length);
+      if (routePattern.startsWith('_') || line.includes('function')) continue;
+      const range = new vscode.Range(i, 0, i, line.length);
       lenses.push(new vscode.CodeLens(range, {
         title: '▶ Run',
         command: 'fuelpHPTools.runRoute',
@@ -197,7 +259,23 @@ class RouteRunnerCodeLensProvider {
   }
 }
 
-async function runRoute(routePattern, fileUri) {
+async function promptParams(params, env) {
+  const values = {};
+  for (const param of params) {
+    const envKey = `FUELPHP_${param.toUpperCase()}`;
+    const envDefault = env[envKey] || param; // fallback to param name itself
+    const input = await vscode.window.showInputBox({
+      prompt: `Value for :${param}`,
+      placeHolder: `Enter to use default: ${envDefault}`,
+      value: '',
+    });
+    if (input === undefined) return null; // cancelled
+    values[param] = input.trim() !== '' ? input.trim() : envDefault;
+  }
+  return values;
+}
+
+async function runRoute(routePatternOrObj, fileUri) {
   const workspaceFolder = vscode.workspace.getWorkspaceFolder(fileUri);
   const root = workspaceFolder ? workspaceFolder.uri.fsPath : '';
   const env = readDotEnv(root);
@@ -205,22 +283,23 @@ async function runRoute(routePattern, fileUri) {
   const config = vscode.workspace.getConfiguration('fuelpHPTools');
   const domain = config.get('domain') || env['FUELPHP_DOMAIN'] || 'http://localhost';
 
-  const params = extractParams(routePattern);
-  const values = {};
-
-  for (const param of params) {
-    const envKey = `FUELPHP_${param.toUpperCase()}`;
-    const envDefault = env[envKey] || '';
-    const input = await vscode.window.showInputBox({
-      prompt: `Value for :${param}`,
-      placeHolder: envDefault ? `Enter to use .env default: ${envDefault}` : `Enter value for :${param}`,
-      value: '',
-    });
-    if (input === undefined) return; // cancelled
-    values[param] = input.trim() !== '' ? input.trim() : envDefault;
+  // Variable-concat route ($pref.$area.$sp_treat.$page)
+  if (routePatternOrObj && typeof routePatternOrObj === 'object' && routePatternOrObj.varConcat) {
+    const params = routePatternOrObj.params;
+    const values = await promptParams(params, env);
+    if (!values) return;
+    // Build URL by joining non-empty values with /
+    const segments = params.map(p => values[p]).filter(v => v && v !== '');
+    const url = `${domain.replace(/\/$/, '')}/${segments.join('/')}`;
+    vscode.env.openExternal(vscode.Uri.parse(url));
+    return;
   }
 
-  const url = buildUrl(domain, routePattern, values);
+  const params = extractParams(routePatternOrObj);
+  const values = await promptParams(params, env);
+  if (!values) return;
+
+  const url = buildUrl(domain, routePatternOrObj, values);
   vscode.env.openExternal(vscode.Uri.parse(url));
 }
 
